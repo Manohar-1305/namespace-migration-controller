@@ -1,0 +1,14 @@
+docker build -t manoharshetty507/namespace-migration-controller:latest .
+sudo docker tag manoharshetty507/namespace-migration-controller:latest manoharshetty507/namespace-migration-controller:latest
+docker push manoharshetty507/namespace-migration-controller:latest
+kubectl get namespacemigrations.migrations.k8s.io
+kubectl get crd namespacemigrations.migrations.k8s.io
+kubectl get namespacemigration migrate-test -o yaml
+kubectl api-resources | grep namespacemigrations
+
+1. Create namespace-migration-rbac.yaml
+2. Create 1.namespace-migration-crd.yaml
+3. 6.migration-controller.yaml
+4. migration-resource.yaml
+5. pod.yaml
+6. testing-resource.yaml

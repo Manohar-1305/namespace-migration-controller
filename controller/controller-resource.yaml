@@ -1,0 +1,8 @@
+apiVersion: migrations.internal/v1
+kind: NamespaceMigration
+metadata:
+  name: migrate-old-to-new
+spec:
+  sourceNamespace: source-ns
+  targetNamespace: target-ns
+
