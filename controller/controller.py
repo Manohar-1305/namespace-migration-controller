@@ -1,9 +1,10 @@
 # Python Controller for Namespace Migration
 from kubernetes import client, config, watch
 import os
+import time
 from kubernetes.client.exceptions import ApiException
 
-# Load Kubeconfig (inside cluster or local)
+# Load config
 if "KUBERNETES_SERVICE_HOST" in os.environ:
     config.load_incluster_config()
 else:
@@ -17,115 +18,121 @@ CRD_GROUP = "migrations.internal"
 CRD_VERSION = "v1"
 CRD_PLURAL = "namespacemigrations"
 
-def delete_namespace_resources(namespace):
-    """Delete all resources in the namespace before deleting it."""
-    print(f"🗑️ Cleaning up resources in namespace: {namespace}")
-
-    # Delete Deployments
-    for deploy in apps_api.list_namespaced_deployment(namespace).items:
-        apps_api.delete_namespaced_deployment(deploy.metadata.name, namespace)
-        print(f"✅ Deleted Deployment: {deploy.metadata.name}")
-
-    # Delete StatefulSets
-    for sts in apps_api.list_namespaced_stateful_set(namespace).items:
-        apps_api.delete_namespaced_stateful_set(sts.metadata.name, namespace)
-        print(f"✅ Deleted StatefulSet: {sts.metadata.name}")
-
-    # Delete Pods
-    for pod in core_api.list_namespaced_pod(namespace).items:
-        core_api.delete_namespaced_pod(pod.metadata.name, namespace)
-        print(f"✅ Deleted Pod: {pod.metadata.name}")
-
-    # Delete Persistent Volume Claims (PVCs)
-    for pvc in core_api.list_namespaced_persistent_volume_claim(namespace).items:
-        core_api.delete_namespaced_persistent_volume_claim(pvc.metadata.name, namespace)
-        print(f"✅ Deleted PVC: {pvc.metadata.name}")
-
-    # Delete ConfigMaps
-    for cm in core_api.list_namespaced_config_map(namespace).items:
-        core_api.delete_namespaced_config_map(cm.metadata.name, namespace)
-        print(f"✅ Deleted ConfigMap: {cm.metadata.name}")
-
-    # Delete Secrets
-    for secret in core_api.list_namespaced_secret(namespace).items:
-        core_api.delete_namespaced_secret(secret.metadata.name, namespace)
-        print(f"✅ Deleted Secret: {secret.metadata.name}")
-
-    print(f"✅ All resources deleted from namespace {namespace}")
-
-    # Delete the namespace
-    try:
-        core_api.delete_namespace(namespace)
-        print(f"✅ Namespace {namespace} deleted successfully.")
-    except ApiException as e:
-        print(f"❌ Error deleting namespace {namespace}: {e}")
 
 def migrate_namespace(source_ns, target_ns):
-    print(f"🚀 Starting migration from {source_ns} to {target_ns}...")
+    print(f"🚀 Starting migration from {source_ns} to {target_ns}")
 
     # Ensure target namespace exists
     try:
-        core_api.create_namespace(client.V1Namespace(metadata=client.V1ObjectMeta(name=target_ns)))
+        core_api.create_namespace(
+            client.V1Namespace(metadata=client.V1ObjectMeta(name=target_ns))
+        )
         print(f"✅ Created namespace: {target_ns}")
     except ApiException as e:
-        if e.status == 409:
-            print(f"⚠️ Namespace {target_ns} already exists, skipping creation.")
-        else:
+        if e.status != 409:
             raise
 
-    # Migrate Deployments
-    for deploy in apps_api.list_namespaced_deployment(source_ns).items:
-        deploy.metadata.namespace = target_ns
-        deploy.metadata.resource_version = None
-        try:
-            apps_api.create_namespaced_deployment(target_ns, deploy)
-            print(f"✅ Deployment {deploy.metadata.name} migrated successfully.")
-        except ApiException as e:
-            print(f"❌ Error migrating Deployment {deploy.metadata.name}: {e}")
-
-    # Migrate StatefulSets
+    # 1️⃣ Scale down StatefulSets in source
     for sts in apps_api.list_namespaced_stateful_set(source_ns).items:
-        sts.metadata.namespace = target_ns
-        sts.metadata.resource_version = None
-        try:
-            apps_api.create_namespaced_stateful_set(target_ns, sts)
-            print(f"✅ StatefulSet {sts.metadata.name} migrated successfully.")
-        except ApiException as e:
-            print(f"❌ Error migrating StatefulSet {sts.metadata.name}: {e}")
+        apps_api.patch_namespaced_stateful_set(
+            sts.metadata.name,
+            source_ns,
+            {"spec": {"replicas": 0}},
+        )
+        print(f"🔽 Scaled down StatefulSet {sts.metadata.name}")
 
-    # Migrate ConfigMaps
+    time.sleep(5)
+
+    # 2️⃣ Migrate PVCs (rebind PV)
+    for pvc in core_api.list_namespaced_persistent_volume_claim(source_ns).items:
+        pv_name = pvc.spec.volume_name
+        print(f"🔎 Migrating PVC {pvc.metadata.name} using PV {pv_name}")
+
+        # Delete PVC in source (PV stays because Retain)
+        core_api.delete_namespaced_persistent_volume_claim(
+            pvc.metadata.name, source_ns
+        )
+
+        # Wait a bit
+        time.sleep(2)
+
+        # Remove claimRef from PV
+        core_api.patch_persistent_volume(
+            pv_name,
+            {"spec": {"claimRef": None}},
+        )
+
+        # Wait for PV to become Available
+        time.sleep(2)
+
+        # Create same PVC in target namespace
+        new_pvc = client.V1PersistentVolumeClaim(
+            metadata=client.V1ObjectMeta(name=pvc.metadata.name),
+            spec=client.V1PersistentVolumeClaimSpec(
+                access_modes=pvc.spec.access_modes,
+                resources=pvc.spec.resources,
+                storage_class_name="",
+                volume_name=pv_name,
+                volume_mode=pvc.spec.volume_mode,
+            ),
+        )
+
+        core_api.create_namespaced_persistent_volume_claim(
+            target_ns, new_pvc
+        )
+        print(f"✅ PVC {pvc.metadata.name} migrated")
+
+    # 3️⃣ Migrate ConfigMaps
     for cm in core_api.list_namespaced_config_map(source_ns).items:
         cm.metadata.namespace = target_ns
         cm.metadata.resource_version = None
-        try:
-            core_api.create_namespaced_config_map(target_ns, cm)
-            print(f"✅ ConfigMap {cm.metadata.name} migrated successfully.")
-        except ApiException as e:
-            print(f"❌ Error migrating ConfigMap {cm.metadata.name}: {e}")
+        cm.metadata.uid = None
+        core_api.create_namespaced_config_map(target_ns, cm)
+        print(f"✅ ConfigMap {cm.metadata.name} migrated")
 
-    # Migrate Secrets
+    # 4️⃣ Migrate Secrets
     for secret in core_api.list_namespaced_secret(source_ns).items:
         secret.metadata.namespace = target_ns
         secret.metadata.resource_version = None
-        try:
-            core_api.create_namespaced_secret(target_ns, secret)
-            print(f"✅ Secret {secret.metadata.name} migrated successfully.")
-        except ApiException as e:
-            print(f"❌ Error migrating Secret {secret.metadata.name}: {e}")
+        secret.metadata.uid = None
+        core_api.create_namespaced_secret(target_ns, secret)
+        print(f"✅ Secret {secret.metadata.name} migrated")
 
-    # Cleanup old namespace
-    delete_namespace_resources(source_ns)
+    # 5️⃣ Migrate Deployments
+    for deploy in apps_api.list_namespaced_deployment(source_ns).items:
+        deploy.metadata.namespace = target_ns
+        deploy.metadata.resource_version = None
+        deploy.metadata.uid = None
+        apps_api.create_namespaced_deployment(target_ns, deploy)
+        print(f"✅ Deployment {deploy.metadata.name} migrated")
 
-    print(f"🎉 Migration completed from {source_ns} to {target_ns}")
+    # 6️⃣ Migrate StatefulSets (restore replicas)
+    for sts in apps_api.list_namespaced_stateful_set(source_ns).items:
+        sts.metadata.namespace = target_ns
+        sts.metadata.resource_version = None
+        sts.metadata.uid = None
+        sts.spec.replicas = 1
+        apps_api.create_namespaced_stateful_set(target_ns, sts)
+        print(f"✅ StatefulSet {sts.metadata.name} migrated")
+
+    print("🎉 Migration completed (source namespace preserved)")
+
 
 def watch_migrations():
     w = watch.Watch()
     print("👀 Watching for namespace migration CRDs...")
-    for event in w.stream(api.list_cluster_custom_object, CRD_GROUP, CRD_VERSION, CRD_PLURAL):
-        migration = event['object']
-        source_ns = migration['spec']['sourceNamespace']
-        target_ns = migration['spec']['targetNamespace']
+    for event in w.stream(
+        api.list_cluster_custom_object,
+        CRD_GROUP,
+        CRD_VERSION,
+        CRD_PLURAL,
+    ):
+        migration = event["object"]
+        source_ns = migration["spec"]["sourceNamespace"]
+        target_ns = migration["spec"]["targetNamespace"]
         migrate_namespace(source_ns, target_ns)
+
 
 if __name__ == "__main__":
     watch_migrations()
+
