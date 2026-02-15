@@ -11,4 +11,32 @@ kubectl api-resources | grep namespacemigrations
 3. 6.migration-controller.yaml
 4. migration-resource.yaml
 5. pod.yaml
+
 6. testing-resource.yaml
+
+🔥 Write real data in target pod
+
+Run this:
+
+kubectl exec -n target-ns stateful-pod-0 -- sh -c "echo 'THIS_IS_PERSISTENT' > /usr/share/nginx/html/test.txt"
+
+Now verify:
+kubectl exec -n target-ns stateful-pod-0 -- cat /usr/share/nginx/html/test.txt
+
+You should see:
+THIS_IS_PERSISTENT
+
+Now verify on NFS server
+On 192.168.0.101:
+cat /data/nfs/k8s/test.txt
+If it prints THIS_IS_PERSISTENT → storage is persistent.
+
+Now test persistence across restart
+
+Delete pod:
+kubectl delete pod stateful-pod-0 -n target-ns
+
+Wait for it to recreate.
+Then:
+kubectl exec -n target-ns stateful-pod-0 -- cat /usr/share/nginx/html/test.txt
+If the text still exists → data persistence confirmed.
