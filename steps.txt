@@ -11,8 +11,15 @@ kubectl api-resources | grep namespacemigrations
 3. 6.migration-controller.yaml
 4. migration-resource.yaml
 5. pod.yaml
-
 6. testing-resource.yaml
+
+kubectl get pv nfs-stateful-pv -o yaml
+kubectl patch pv nfs-stateful-pv --type=json -p='[{"op":"remove","path":"/spec/claimRef"}]'
+
+kubectl patch pv nfs-stateful-pv -p '{"spec":{"claimRef": null}}'
+
+kubectl delete pvc stateful-pvc -n target-ns
+
 
 🔥 Write real data in target pod
 
@@ -40,3 +47,4 @@ Wait for it to recreate.
 Then:
 kubectl exec -n target-ns stateful-pod-0 -- cat /usr/share/nginx/html/test.txt
 If the text still exists → data persistence confirmed.
+
