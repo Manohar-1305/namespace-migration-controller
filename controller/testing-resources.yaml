@@ -3,6 +3,25 @@ kind: Namespace
 metadata:
   name: source-ns
 ---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: example-configmap
+  namespace: source-ns
+data:
+  APP_ENV: "production"
+  LOG_LEVEL: "info"
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: example-secret
+  namespace: source-ns
+type: Opaque
+data:
+  DB_USER: dXNlcm5hbWU=
+  DB_PASS: cGFzc3dvcmQ=
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -30,24 +49,48 @@ spec:
                 name: example-secret
 ---
 apiVersion: v1
-kind: ConfigMap
+kind: PersistentVolume
 metadata:
-  name: example-configmap
-  namespace: source-ns
-data:
-  APP_ENV: "production"
-  LOG_LEVEL: "info"
+  name: nfs-stateful-pv
+spec:
+  capacity:
+    storage: 1Gi
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  persistentVolumeReclaimPolicy: Retain
+  storageClassName: ""
+  nfs:
+    server: 192.168.0.101
+    path: /data/nfs/k8s
 ---
 apiVersion: v1
-kind: Secret
+kind: PersistentVolumeClaim
 metadata:
-  name: example-secret
+  name: stateful-pvc
   namespace: source-ns
-type: Opaque
-data:
-  DB_USER: dXNlcm5hbWU= # base64 encoded "username"
-  DB_PASS: cGFzc3dvcmQ= # base64 encoded "password"
-
+spec:
+  storageClassName: ""
+  volumeMode: Filesystem
+  accessModes:
+    - ReadWriteMany
+  resources:
+    requests:
+      storage: 1Gi
+  volumeName: nfs-stateful-pv
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: stateful-service
+  namespace: source-ns
+spec:
+  clusterIP: None
+  selector:
+    app: stateful-pod
+  ports:
+    - port: 80
+      targetPort: 80
 ---
 apiVersion: apps/v1
 kind: StatefulSet
@@ -55,8 +98,8 @@ metadata:
   name: stateful-pod
   namespace: source-ns
 spec:
-  serviceName: "stateful-service"
-  replicas: 1 # Change this for more replicas
+  serviceName: stateful-service
+  replicas: 1
   selector:
     matchLabels:
       app: stateful-pod
@@ -67,17 +110,13 @@ spec:
     spec:
       containers:
         - name: my-container
-          image: nginx # Change to your required image
+          image: nginx
           ports:
             - containerPort: 80
           volumeMounts:
             - name: data-storage
-              mountPath: /usr/share/nginx/html # Mount path inside the container
-  volumeClaimTemplates:
-    - metadata:
-        name: data-storage
-      spec:
-        accessModes: ["ReadWriteOnce"]
-        resources:
-          requests:
-            storage: 1Gi # Define the persistent volume size
+              mountPath: /usr/share/nginx/html
+      volumes:
+        - name: data-storage
+          persistentVolumeClaim:
+            claimName: stateful-pvc
