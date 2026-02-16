@@ -1,4 +1,3 @@
-# Deployment for the Namespace Migration Controller
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -17,5 +16,5 @@ spec:
       serviceAccountName: namespace-migration-sa
       containers:
         - name: controller
-          image: manoharshetty507/namespacemigration-controller:v1
-          imagePullPolicy: Always
+          image: docker.io/library/namespacemigration-controller:v2
+          imagePullPolicy: IfNotPresent
