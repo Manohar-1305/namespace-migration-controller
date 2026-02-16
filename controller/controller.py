@@ -22,7 +22,6 @@ CRD_PLURAL = "namespacemigrations"
 def migrate_namespace(source_ns, target_ns):
     print(f"🚀 Starting migration from {source_ns} to {target_ns}")
 
-    # Ensure target namespace exists
     try:
         core_api.create_namespace(
             client.V1Namespace(metadata=client.V1ObjectMeta(name=target_ns))
@@ -43,29 +42,24 @@ def migrate_namespace(source_ns, target_ns):
 
     time.sleep(5)
 
-    # 2️⃣ Migrate PVCs (rebind PV)
+    # 2️⃣ Migrate PVCs
     for pvc in core_api.list_namespaced_persistent_volume_claim(source_ns).items:
         pv_name = pvc.spec.volume_name
         print(f"🔎 Migrating PVC {pvc.metadata.name} using PV {pv_name}")
 
-        # Delete PVC in source (PV stays because Retain)
         core_api.delete_namespaced_persistent_volume_claim(
             pvc.metadata.name, source_ns
         )
 
-        # Wait a bit
         time.sleep(2)
 
-        # Remove claimRef from PV
         core_api.patch_persistent_volume(
             pv_name,
             {"spec": {"claimRef": None}},
         )
 
-        # Wait for PV to become Available
         time.sleep(2)
 
-        # Create same PVC in target namespace
         new_pvc = client.V1PersistentVolumeClaim(
             metadata=client.V1ObjectMeta(name=pvc.metadata.name),
             spec=client.V1PersistentVolumeClaimSpec(
@@ -77,43 +71,73 @@ def migrate_namespace(source_ns, target_ns):
             ),
         )
 
-        core_api.create_namespaced_persistent_volume_claim(
-            target_ns, new_pvc
-        )
-        print(f"✅ PVC {pvc.metadata.name} migrated")
+        try:
+            core_api.create_namespaced_persistent_volume_claim(
+                target_ns, new_pvc
+            )
+            print(f"✅ PVC {pvc.metadata.name} migrated")
+        except ApiException as e:
+            if e.status == 409:
+                print(f"⚠️ PVC {pvc.metadata.name} already exists, skipping")
+            else:
+                raise
 
     # 3️⃣ Migrate ConfigMaps
     for cm in core_api.list_namespaced_config_map(source_ns).items:
         cm.metadata.namespace = target_ns
         cm.metadata.resource_version = None
         cm.metadata.uid = None
-        core_api.create_namespaced_config_map(target_ns, cm)
-        print(f"✅ ConfigMap {cm.metadata.name} migrated")
+        try:
+            core_api.create_namespaced_config_map(target_ns, cm)
+            print(f"✅ ConfigMap {cm.metadata.name} migrated")
+        except ApiException as e:
+            if e.status == 409:
+                print(f"⚠️ ConfigMap {cm.metadata.name} already exists, skipping")
+            else:
+                raise
 
     # 4️⃣ Migrate Secrets
     for secret in core_api.list_namespaced_secret(source_ns).items:
         secret.metadata.namespace = target_ns
         secret.metadata.resource_version = None
         secret.metadata.uid = None
-        core_api.create_namespaced_secret(target_ns, secret)
-        print(f"✅ Secret {secret.metadata.name} migrated")
+        try:
+            core_api.create_namespaced_secret(target_ns, secret)
+            print(f"✅ Secret {secret.metadata.name} migrated")
+        except ApiException as e:
+            if e.status == 409:
+                print(f"⚠️ Secret {secret.metadata.name} already exists, skipping")
+            else:
+                raise
 
     # 5️⃣ Migrate Deployments
     for deploy in apps_api.list_namespaced_deployment(source_ns).items:
         deploy.metadata.namespace = target_ns
         deploy.metadata.resource_version = None
         deploy.metadata.uid = None
-        apps_api.create_namespaced_deployment(target_ns, deploy)
-        print(f"✅ Deployment {deploy.metadata.name} migrated")
+        try:
+            apps_api.create_namespaced_deployment(target_ns, deploy)
+            print(f"✅ Deployment {deploy.metadata.name} migrated")
+        except ApiException as e:
+            if e.status == 409:
+                print(f"⚠️ Deployment {deploy.metadata.name} already exists, skipping")
+            else:
+                raise
 
-    # 6️⃣ Migrate StatefulSets (restore replicas)
+    # 6️⃣ Migrate StatefulSets
     for sts in apps_api.list_namespaced_stateful_set(source_ns).items:
         sts.metadata.namespace = target_ns
         sts.metadata.resource_version = None
         sts.metadata.uid = None
         sts.spec.replicas = 1
-        apps_api.create_namespaced_stateful_set(target_ns, sts)
-        print(f"✅ StatefulSet {sts.metadata.name} migrated")
+        try:
+            apps_api.create_namespaced_stateful_set(target_ns, sts)
+            print(f"✅ StatefulSet {sts.metadata.name} migrated")
+        except ApiException as e:
+            if e.status == 409:
+                print(f"⚠️ StatefulSet {sts.metadata.name} already exists, skipping")
+            else:
+                raise
 
     print("🎉 Migration completed (source namespace preserved)")
 
@@ -135,4 +159,3 @@ def watch_migrations():
 
 if __name__ == "__main__":
     watch_migrations()
-
