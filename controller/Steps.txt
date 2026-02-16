@@ -1,0 +1,20 @@
+docker build -t namespacemigration-controller:v1 .
+docker save namespacemigration-controller:v1 -o controller.tar
+ctr -n k8s.io images import controller.tar
+kubectl rollout restart deployment namespace-migration-controller -n kube-system
+kubectl delete namespacemigration migrate-old-to-new
+kubectl apply -f controller-resource.yaml
+
+
+docker build -t namespacemigration-controller:v2 .
+docker save namespacemigration-controller:v2 -o controller-v2.tar
+ctr -n k8s.io images import controller-v2.tar
+ctr -n k8s.io images ls | grep namespacemigration
+kubectl rollout restart deployment namespace-migration-controller -n kube-system
+kubectl describe pod -n kube-system | grep Image:
+k get pods -n kube-system
+kubectl delete namespacemigration migrate-old-to-new
+kubectl apply -f controller-resource.yaml
+
+kubectl exec -n target-ns stateful-pod-0 -- sh -c "echo hello > /usr/share/nginx/html/test.txt"
+kubectl exec -n target-ns stateful-pod-0 -- sh -c "echo This file is saved> /usr/share/nginx/html/saved.txt"
