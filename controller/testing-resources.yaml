@@ -59,7 +59,7 @@ spec:
   accessModes:
     - ReadWriteMany
   persistentVolumeReclaimPolicy: Retain
-  storageClassName: ""
+  storageClassName: ""   # disables default SC
   nfs:
     server: 192.168.0.101
     path: /data/nfs/k8s
@@ -70,14 +70,15 @@ metadata:
   name: stateful-pvc
   namespace: source-ns
 spec:
-  storageClassName: ""
+  storageClassName: ""   # must match PV
   volumeMode: Filesystem
   accessModes:
     - ReadWriteMany
   resources:
     requests:
       storage: 1Gi
-  volumeName: nfs-stateful-pv
+  volumeName: nfs-stateful-pv  # hard bind
+
 ---
 apiVersion: v1
 kind: Service
